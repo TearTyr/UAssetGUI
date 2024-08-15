@@ -137,9 +137,12 @@ namespace UAssetGUI
                 AutoSize = true,
                 Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Both
+                MaxLength = int.MaxValue,
+                ScrollBars = ScrollBars.Both,
             };
             splitContainer1.Panel2.Controls.Add(jsonView);
+
+            jsonView.TextChanged += (object sender, EventArgs e) => { if (tableEditor == null) return; tableEditor.dirtySinceLastLoad = true; SetUnsavedChanges(true); };
 
             importBinaryData.Visible = false;
             exportBinaryData.Visible = false;
@@ -202,9 +205,8 @@ namespace UAssetGUI
             test.Show();
         }
 
-        private void UpdateMappings(string newSelection = null, bool alsoCheckVersion = true)
+        internal void UpdateMappings(string newSelection = null, bool alsoCheckVersion = true)
         {
-            UAGConfig.MappingsToSuppressWarningsFor.Clear();
             UAGConfig.LoadMappings();
             UAGUtils.InvokeUI(() =>
             {
@@ -389,7 +391,9 @@ namespace UAssetGUI
             }
         }
 
-        private List<string> unknownTypes = new List<string>();
+        private ISet<string> unknownTypes = new HashSet<string>();
+        private ISet<string> rawStructTypes = new HashSet<string>();
+        private int numRawStructs = 0;
         private bool RecordUnknownProperty(PropertyData dat)
         {
             if (dat == null) return false;
@@ -397,9 +401,19 @@ namespace UAssetGUI
             if (dat is UnknownPropertyData unknownDat)
             {
                 string serializingType = unknownDat?.SerializingPropertyType?.Value;
-                if (!string.IsNullOrEmpty(serializingType) && !unknownTypes.Contains(serializingType))
+                if (!string.IsNullOrEmpty(serializingType))
                 {
                     unknownTypes.Add(serializingType);
+                    return true;
+                }
+            }
+            if (dat is RawStructPropertyData unknownDat2)
+            {
+                numRawStructs++;
+                string serializingType = unknownDat2?.StructType?.ToString();
+                if (!string.IsNullOrEmpty(serializingType))
+                {
+                    rawStructTypes.Add(serializingType);
                     return true;
                 }
             }
@@ -526,12 +540,12 @@ namespace UAssetGUI
                 currentSavingPath = savingPath;
                 SetUnsavedChanges(false);
 
-                tableEditor = new TableHandler(dataGridView1, targetAsset, treeView1);
+                tableEditor = new TableHandler(dataGridView1, targetAsset, treeView1, jsonView);
 
                 saveToolStripMenuItem.Enabled = !IsReadOnly();
                 saveAsToolStripMenuItem.Enabled = true;
                 findToolStripMenuItem.Enabled = true;
-                stageToolStripMenuItem.Enabled = true;
+                //stageToolStripMenuItem.Enabled = true;
 
                 tableEditor.FillOutTree(!UAGConfig.Data.EnableDynamicTree);
                 tableEditor.Load();
@@ -552,7 +566,9 @@ namespace UAssetGUI
                 nameMapRefs = null;
 
                 int failedCategoryCount = 0;
-                unknownTypes = new List<string>();
+                unknownTypes = new HashSet<string>();
+                rawStructTypes = new HashSet<string>();
+                numRawStructs = 0;
                 foreach (Export cat in tableEditor.asset.Exports)
                 {
                     if (cat is RawExport) failedCategoryCount++;
@@ -584,12 +600,17 @@ namespace UAssetGUI
 
                 if (hasDuplicates)
                 {
-                    MessageBox.Show("Encountered duplicate name map entries. Serialized FNames will coalesce to one of the entries in the map and binary equality may not be maintained.", "Notice");
+                    MessageBox.Show("Encountered duplicate name map entries! Serialized FNames will coalesce to one of the entries in the map and binary equality may not be maintained.", "Notice");
                 }
 
                 if (unknownTypes.Count > 0)
                 {
-                    MessageBox.Show("Encountered " + unknownTypes.Count + " unknown property types:\n" + string.Join(", ", unknownTypes) + (failedToMaintainBinaryEquality ? "" : "\n\nThe asset will still parse normally."), "Notice");
+                    MessageBox.Show("Encountered " + unknownTypes.Count + " unknown property type" + (unknownTypes.Count == 1 ? "" : "s") + ":\n" + string.Join(", ", unknownTypes) + (failedToMaintainBinaryEquality ? "" : "\n\nThe asset will still parse normally."), "Notice");
+                }
+
+                if (rawStructTypes.Count > 0)
+                {
+                    MessageBox.Show("Encountered " + numRawStructs + " struct" + (numRawStructs == 1 ? "" : "s") + " that could not be parsed, and " + (numRawStructs == 1 ? "was" : "were") + " instead read as an array of bytes. " + (numRawStructs == 1 ? "It has the following type" : "They have the following types") + ":\n" + string.Join(", ", rawStructTypes) + (failedToMaintainBinaryEquality ? "" : "\n\nThe asset will still parse normally."), "Notice");
                 }
 
                 if (tableEditor.asset.HasUnversionedProperties && tableEditor.asset.Mappings == null)
@@ -624,7 +645,7 @@ namespace UAssetGUI
                 saveToolStripMenuItem.Enabled = false;
                 saveAsToolStripMenuItem.Enabled = false;
                 findToolStripMenuItem.Enabled = false;
-                stageToolStripMenuItem.Enabled = false;
+                //stageToolStripMenuItem.Enabled = false;
 
                 treeView1.Nodes.Clear();
                 dataGridView1.Columns.Clear();
@@ -650,6 +671,8 @@ namespace UAssetGUI
             {
                 LastLoadTimestamp = DateTime.UtcNow;
                 UpdateRPC();
+
+                UAGUtils.InvokeUI(treeView1.Select);
             }
         }
 
@@ -799,6 +822,8 @@ namespace UAssetGUI
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (treeView1?.SelectedNode != null && treeView1.SelectedNode is PointingTreeNode pointerNode && pointerNode.Type == PointingTreeNodeType.Kismet) return base.ProcessCmdKey(ref msg, keyData);
+
             switch (keyData)
             {
                 case Keys.Control | Keys.C:
@@ -928,7 +953,7 @@ namespace UAssetGUI
             PropertyData deserializedClipboard = null;
             try
             {
-                deserializedClipboard = tableEditor.asset.DeserializeJsonObject(Clipboard.GetText()) as PropertyData;
+                deserializedClipboard = tableEditor.asset.DeserializeJsonObject<PropertyData>(Clipboard.GetText());
             }
             catch (Exception)
             {
@@ -1009,7 +1034,7 @@ namespace UAssetGUI
                             Export deserExport = null;
                             try
                             {
-                                deserExport = tableEditor.asset.DeserializeJsonObject(Clipboard.GetText()) as Export;
+                                deserExport = tableEditor.asset.DeserializeJsonObject<Export>(Clipboard.GetText());
                             }
                             catch (Exception)
                             {
@@ -1255,9 +1280,20 @@ namespace UAssetGUI
             }
         }
 
+        private void treeView1_BeforeSelect(object sender, TreeViewCancelEventArgs e)
+        {
+            if (tableEditor.dirtySinceLastLoad)
+            {
+                // force refresh before tabbing out if we need to finalize changes before serialization (typically, when null entries exist to get rid of)
+                // we don't just do this every time for performance reasons
+                tableEditor.Save(true);
+            }
+        }
+
         private void treeView1_AfterSelect(object sender, TreeViewEventArgs e)
         {
             UpdateModeFromSelectedNode(e.Node);
+            UAGUtils.InvokeUI(treeView1.Select);
         }
 
         private void dataGridView1_MouseWheel(object sender, MouseEventArgs e)
@@ -2021,8 +2057,16 @@ namespace UAssetGUI
                     replacementPrompt.Dispose();
                 }
 
-                File.Copy(importPath, Path.ChangeExtension(Path.Combine(UAGConfig.MappingsFolder, newFileName), ".usmap"));
-                UpdateMappings(newFileName);
+                try
+                {
+                    File.Copy(importPath, Path.ChangeExtension(Path.Combine(UAGConfig.MappingsFolder, newFileName), ".usmap"), true);
+                    if (UAGConfig.AllMappings.ContainsKey(newFileName)) UAGConfig.AllMappings.Remove(newFileName);
+                    UpdateMappings(newFileName);
+                }
+                catch
+                {
+                    MessageBox.Show("Failed to import mappings!", "Uh oh!");
+                }
             });
         }
 

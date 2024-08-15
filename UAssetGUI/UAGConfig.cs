@@ -22,6 +22,7 @@ namespace UAssetGUI
         public bool EnableBak;
         public bool RestoreSize;
         public bool EnableUpdateNotice;
+        public bool EnablePrettyBytecode;
         public int StartupWidth;
         public int StartupHeight;
 
@@ -39,6 +40,7 @@ namespace UAssetGUI
             EnableBak = true;
             RestoreSize = true;
             EnableUpdateNotice = true;
+            EnablePrettyBytecode = true;
             StartupWidth = 1000;
             StartupHeight = 700;
         }
@@ -52,7 +54,6 @@ namespace UAssetGUI
         public readonly static string MappingsFolder = Path.Combine(ConfigFolder, "Mappings");
         public readonly static string StagingFolder = Path.Combine(ConfigFolder, "Staging");
         public readonly static string ExtractedFolder = Path.Combine(ConfigFolder, "Extracted");
-        public static ISet<string> MappingsToSuppressWarningsFor = new HashSet<string>();
 
         internal static bool DifferentStagingPerPak = false;
 
@@ -84,13 +85,19 @@ namespace UAssetGUI
             return res;
         }
 
-        public static void StageFile(string rawPathOnDisk, string CurrentContainerPath)
+        public static void StageFile(string rawPathOnDisk, string CurrentContainerPath, string newPath = null)
         {
-            var finalPath = DifferentStagingPerPak ? Path.Combine(StagingFolder, Path.GetFileNameWithoutExtension(CurrentContainerPath), Path.GetFileName(rawPathOnDisk)) : Path.Combine(StagingFolder, Path.GetFileName(rawPathOnDisk));
-            Directory.CreateDirectory(Path.GetDirectoryName(finalPath));
+            if (newPath == null) newPath = Path.GetFileName(rawPathOnDisk);
+            newPath = newPath.Replace('/', Path.DirectorySeparatorChar);
+
+            var finalPath = DifferentStagingPerPak ? Path.Combine(StagingFolder, Path.GetFileNameWithoutExtension(CurrentContainerPath), newPath) : Path.Combine(StagingFolder, newPath);
+            try { Directory.CreateDirectory(Path.GetDirectoryName(finalPath)); } catch { return; } // fail silently if cant make the directory we need
+
+            try { Directory.Delete(finalPath, true); } catch { } // if we turn a directory into a file, try and get rid of the directory
 
             File.Copy(rawPathOnDisk, finalPath, true);
             try { File.Copy(Path.ChangeExtension(rawPathOnDisk, ".uexp"), Path.ChangeExtension(finalPath, ".uexp"), true); } catch { }
+            try { File.Copy(Path.ChangeExtension(rawPathOnDisk, ".ubulk"), Path.ChangeExtension(finalPath, ".ubulk"), true); } catch { }
         }
 
         public static void StageFile(DirectoryTreeItem item, string newPath = null)
@@ -103,15 +110,21 @@ namespace UAssetGUI
             }
 
             if (newPath == null) newPath = item.FullPath;
+            newPath = newPath.Replace('/', Path.DirectorySeparatorChar);
+
             string outputPath = item.SaveFileToTemp();
-            var finalPath = DifferentStagingPerPak ? Path.Combine(StagingFolder, Path.GetFileNameWithoutExtension(item.ParentForm.CurrentContainerPath), newPath.Replace('/', Path.DirectorySeparatorChar)) : Path.Combine(StagingFolder, newPath.Replace('/', Path.DirectorySeparatorChar));
+            var finalPath = DifferentStagingPerPak ? Path.Combine(StagingFolder, Path.GetFileNameWithoutExtension(item.ParentForm.CurrentContainerPath), newPath) : Path.Combine(StagingFolder, newPath);
             if (outputPath == null || finalPath == null) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(finalPath));
-            
+            try { Directory.CreateDirectory(Path.GetDirectoryName(finalPath)); } catch { return; } // fail silently if cant make the directory we need
+
+            try { Directory.Delete(finalPath, true); } catch { } // if we turn a directory into a file, try and get rid of the directory
+
             File.Copy(outputPath, finalPath, true);
             try { File.Copy(Path.ChangeExtension(outputPath, ".uexp"), Path.ChangeExtension(finalPath, ".uexp"), true); } catch { }
+            try { File.Copy(Path.ChangeExtension(outputPath, ".ubulk"), Path.ChangeExtension(finalPath, ".ubulk"), true); } catch { }
             try { File.Delete(outputPath); } catch { }
             try { File.Delete(Path.ChangeExtension(outputPath, ".uexp")); } catch { }
+            try { File.Delete(Path.ChangeExtension(outputPath, ".ubulk")); } catch { }
         }
 
         public static string ExtractFile(DirectoryTreeItem item)
@@ -126,12 +139,16 @@ namespace UAssetGUI
             }
 
             string outputPath = item.SaveFileToTemp();
-            Directory.CreateDirectory(Path.GetDirectoryName(finalPath));
+            try { Directory.CreateDirectory(Path.GetDirectoryName(finalPath)); } catch { return null; } // fail silently if cant make the directory we need
+
+            try { Directory.Delete(finalPath, true); } catch { } // if we turn a directory into a file, try and get rid of the directory
 
             File.Copy(outputPath, finalPath, true);
             try { File.Copy(Path.ChangeExtension(outputPath, ".uexp"), Path.ChangeExtension(finalPath, ".uexp"), true); } catch { }
+            try { File.Copy(Path.ChangeExtension(outputPath, ".ubulk"), Path.ChangeExtension(finalPath, ".ubulk"), true); } catch { }
             try { File.Delete(outputPath); } catch { }
             try { File.Delete(Path.ChangeExtension(outputPath, ".uexp")); } catch { }
+            try { File.Delete(Path.ChangeExtension(outputPath, ".ubulk")); } catch { }
 
             return finalPath;
         }
@@ -147,7 +164,19 @@ namespace UAssetGUI
                 }
                 catch 
                 {
-                    UAGUtils.InvokeUI(() => MessageBox.Show("Failed to parse " + name + " mappings", "Notice"));
+                    UAGUtils.InvokeUI(() =>
+                    {
+                        MessageBox.Show("Failed to parse mappings: " + name, "Notice");
+
+                        // update list of mappings for good measure
+                        foreach (var form in Application.OpenForms)
+                        {
+                            if (form is Form1 form1)
+                            {
+                                form1.UpdateMappings("No mappings", false);
+                            }
+                        }
+                    });
                 }
             }
 

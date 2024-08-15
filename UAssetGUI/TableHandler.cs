@@ -55,7 +55,8 @@ namespace UAssetGUI
         UPropertyData,
         ByteArray,
         Dummy,
-        UserDefinedStructData
+        UserDefinedStructData,
+        Kismet
     }
 
     public class PointingTreeNode : TreeNode
@@ -129,8 +130,10 @@ namespace UAssetGUI
         public UAsset asset;
         public TreeView treeView1;
         public DataGridView dataGridView1;
+        public TextBox jsonView;
 
         public bool readyToSave = true;
+        public bool dirtySinceLastLoad = false; 
 
         public static Color ARGBtoRGB(Color ARGB)
         {
@@ -279,7 +282,7 @@ namespace UAssetGUI
                                 }
                                 else
                                 {
-                                    var bytecodeNode = new PointingTreeNode("ScriptBytecode (" + structUs.ScriptBytecode.Length + " instructions)", structUs.ScriptBytecode, PointingTreeNodeType.Normal, i);
+                                    var bytecodeNode = new PointingTreeNode("ScriptBytecode (" + structUs.ScriptBytecode.Length + " instructions)", structUs, PointingTreeNodeType.Kismet, i);
                                     bytecodeNode.ChildrenInitialized = true;
                                     parentNode2.Nodes.Add(bytecodeNode);
                                 }
@@ -1197,6 +1200,7 @@ namespace UAssetGUI
 
             dataGridView1.BackgroundColor = UAGPalette.DataGridViewActiveColor;
             readyToSave = false;
+            dirtySinceLastLoad = false;
 
             origForm.ResetCurrentDataGridViewStrip();
 
@@ -1335,7 +1339,7 @@ namespace UAssetGUI
 
                     for (int num = 0; num < asset.SoftPackageReferenceList.Count; num++)
                     {
-                        dataGridView1.Rows.Add(asset.SoftPackageReferenceList[num]);
+                        dataGridView1.Rows.Add(asset.SoftPackageReferenceList[num]?.ToString() ?? FString.NullCase);
                     }
                     break;
                 case TableHandlerMode.WorldTileInfo:
@@ -1416,6 +1420,29 @@ namespace UAssetGUI
                             origForm.exportBinaryData.Visible = true;
                             origForm.setBinaryData.Visible = true;
                             currentlyFocusedControl.Focus();
+                            origForm.ForceResize();
+                            standardRendering = false;
+                        }
+                        else if (pointerNode.Type == PointingTreeNodeType.Kismet)
+                        {
+                            var bytecode = ((StructExport)pointerNode.Pointer).ScriptBytecode;
+                            Control currentlyFocusedControl1 = origForm.ActiveControl;
+                            if (UAGConfig.Data.EnablePrettyBytecode)
+                            {
+                                UAssetAPI.Kismet.KismetSerializer.asset = asset;
+                                dataGridView1.Visible = false;
+                                jsonView.Text = new JObject(new JProperty("Script", SerializeScript(bytecode))).ToString();
+                                jsonView.Visible = true;
+                                jsonView.ReadOnly = true;
+                            }
+                            else
+                            {
+                                dataGridView1.Visible = false;
+                                jsonView.Text = asset.SerializeJsonObject(bytecode, true);
+                                jsonView.Visible = true;
+                                jsonView.ReadOnly = false;
+                            }
+                            currentlyFocusedControl1.Focus();
                             origForm.ForceResize();
                             standardRendering = false;
                         }
@@ -1906,16 +1933,6 @@ namespace UAssetGUI
                                     renderingArr = usRealArr;
                                     dataGridView1.AllowUserToAddRows = false;
                                     break;
-                                case KismetExpression[] bytecode:
-                                    UAssetAPI.Kismet.KismetSerializer.asset = asset;
-                                    Control currentlyFocusedControl1 = origForm.ActiveControl;
-                                    dataGridView1.Visible = false;
-                                    jsonView.Text = new JObject(new JProperty("Script", SerializeScript(bytecode))).ToString();
-                                    jsonView.Visible = true;
-                                    currentlyFocusedControl1.Focus();
-                                    origForm.ForceResize();
-                                    standardRendering = false;
-                                    break;
                             }
                         }
 
@@ -1958,6 +1975,7 @@ namespace UAssetGUI
         public void Save(bool forceNewLoad) // Reads from the table and updates the asset data as needed
         {
             if (!readyToSave) return;
+            if (dataGridView1?.Rows == null) return;
 
             switch (mode)
             {
@@ -2148,7 +2166,7 @@ namespace UAssetGUI
                                     break;
                                 case ExportDetailsParseType.FName:
                                     settingVal = null;
-                                    if (currentVal is string rawFName) // blah(0)
+                                    if (currentVal is string rawFName)
                                     {
                                         settingVal = FName.FromString(asset, rawFName);
                                     }
@@ -2434,9 +2452,17 @@ namespace UAssetGUI
                             for (int i = 0; i < dataGridView1.Rows.Count; i++)
                             {
                                 PropertyData val = RowToPD(i, usStruct.Value.ElementAtOrDefault(i), false, asset.HasUnversionedProperties);
+                                if (val == null)
+                                {
+                                    dirtySinceLastLoad = true;
+                                    newData.Add(null);
+                                    continue;
+                                    // deliberately do not increment newCount
+                                }
                                 newData.Add(val);
-                                if (val != null) newCount++;
+                                newCount++;
                             }
+                            if (newData[newData.Count - 1] == null) newData.RemoveAt(newData.Count - 1);
                             usStruct.Value = newData;
 
                             string decidedName = usStruct.Name.Value.Value;
@@ -2553,10 +2579,6 @@ namespace UAssetGUI
                             }
                             box3.Value = new TBox<FVector2f>(min, max, isValid);
                         }
-                        else if (pointerNode.Pointer is ClassExport usBGCCat)
-                        {
-                            // No writing here
-                        }
                         else if (pointerNode.Pointer is NormalExport usCat)
                         {
                             switch (pointerNode.Type)
@@ -2568,6 +2590,7 @@ namespace UAssetGUI
                                         PropertyData val = RowToPD(i, usCat.Data.ElementAtOrDefault(i), false, asset.HasUnversionedProperties);
                                         if (val == null)
                                         {
+                                            dirtySinceLastLoad = true;
                                             newData.Add(null);
                                             continue;
                                         }
@@ -2585,6 +2608,7 @@ namespace UAssetGUI
                                         PropertyData val = RowToPD(i, usCatUDS.StructData.ElementAtOrDefault(i), false, asset.HasUnversionedProperties);
                                         if (val == null)
                                         {
+                                            dirtySinceLastLoad = true;
                                             newData2.Add(null);
                                             continue;
                                         }
@@ -2618,8 +2642,17 @@ namespace UAssetGUI
                                         }
                                     }
                                     break;
+                                case PointingTreeNodeType.Kismet:
+                                    if (!UAGConfig.Data.EnablePrettyBytecode)
+                                    {
+                                        try
+                                        {
+                                            ((StructExport)pointerNode.Pointer).ScriptBytecode = asset.DeserializeJsonObject<KismetExpression[]>(jsonView.Text);
+                                        }
+                                        catch { }
+                                    }
+                                    break;
                             }
-
                         }
                         else if (pointerNode.Pointer is UDataTable dtUs)
                         {
@@ -2628,9 +2661,10 @@ namespace UAssetGUI
                             ///var numTimesNameUses = new Dictionary<string, int>();
                             for (int i = 0; i < dataGridView1.Rows.Count; i++)
                             {
-                                PropertyData val = RowToPD(i, dtUs.Data.ElementAtOrDefault(i), false, asset.HasUnversionedProperties); // TODO: verify if actually dummies when unversioned
+                                PropertyData val = RowToPD(i, dtUs.Data.ElementAtOrDefault(i), false, false);
                                 if (val == null || !(val is StructPropertyData))
                                 {
+                                    dirtySinceLastLoad = true;
                                     newData.Add(null);
                                     continue;
                                 }
@@ -2660,7 +2694,14 @@ namespace UAssetGUI
                             for (int i = 0; i < dataGridView1.Rows.Count; i++)
                             {
                                 PropertyData val = RowToPD(i, origArr.ElementAtOrDefault(i), !(origArr.ElementAtOrDefault(i) is StructPropertyData), asset.HasUnversionedProperties);
-                                if (val != null) count++;
+                                if (val == null)
+                                {
+                                    dirtySinceLastLoad = true;
+                                    newData.Add(null);
+                                    continue;
+                                    // deliberately do not increment count
+                                }
+                                count++;
                                 newData.Add(val);
                             }
                             usArr.Value = newData.ToArray();
@@ -2713,7 +2754,11 @@ namespace UAssetGUI
                             for (int i = 0; i < dataGridView1.Rows.Count; i++)
                             {
                                 PropertyData val = RowToPD(i, origArr.ElementAtOrDefault(i), false, asset.HasUnversionedProperties);
-                                if (val == null) continue;
+                                if (val == null)
+                                {
+                                    dirtySinceLastLoad = true;
+                                    continue;
+                                }
                                 newData.Add(val);
                             }
                             pointerNode.Pointer = newData.ToArray();
@@ -2733,11 +2778,12 @@ namespace UAssetGUI
             }
         }
 
-        public TableHandler(DataGridView dataGridView1, UAsset asset, TreeView treeView1)
+        public TableHandler(DataGridView dataGridView1, UAsset asset, TreeView treeView1, TextBox jsonView)
         {
             this.asset = asset;
             this.dataGridView1 = dataGridView1;
             this.treeView1 = treeView1;
+            this.jsonView = jsonView;
             this.mode = 0;
         }
     }
