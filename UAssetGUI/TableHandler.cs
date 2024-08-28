@@ -201,6 +201,13 @@ namespace UAssetGUI
 
         public void FillOutTree(bool fillAllSubNodes)
         {
+            int numDependsInts = 0;
+            if (asset.DependsMap != null)
+            {
+                foreach (var entry in asset.DependsMap) numDependsInts += entry.Length;
+            }
+            // if numDependsInts == 0, then it's really just unused
+
             treeView1.BeginUpdate();
             treeView1.Nodes.Clear();
             treeView1.BackColor = UAGPalette.BackColor;
@@ -208,8 +215,8 @@ namespace UAssetGUI
             treeView1.Nodes.Add(new PointingTreeNode("Name Map", null));
             treeView1.Nodes.Add(new PointingTreeNode("Import Data", null));
             treeView1.Nodes.Add(new PointingTreeNode("Export Information", null));
-            treeView1.Nodes.Add(new PointingTreeNode("Depends Map", null));
-            treeView1.Nodes.Add(new PointingTreeNode("Soft Package References", null));
+            if (numDependsInts != 0) treeView1.Nodes.Add(new PointingTreeNode("Depends Map", null));
+            if (asset.SoftPackageReferenceList != null) treeView1.Nodes.Add(new PointingTreeNode("Soft Package References", null));
             if (asset.WorldTileInfo != null)
             {
                 treeView1.Nodes.Add(new PointingTreeNode("World Tile Info", null));
@@ -222,7 +229,7 @@ namespace UAssetGUI
                     lodListNode.Nodes.Add(new PointingTreeNode("LOD entry #" + (i + 1), asset.WorldTileInfo.LODList[i]));
                 }
             }
-            treeView1.Nodes.Add(new PointingTreeNode("Data Resources", null));
+            if (asset.ObjectVersionUE5 >= ObjectVersionUE5.DATA_RESOURCES) treeView1.Nodes.Add(new PointingTreeNode("Data Resources", null));
             treeView1.Nodes.Add(new PointingTreeNode("Custom Version Container", null));
             treeView1.Nodes.Add(new PointingTreeNode("Export Data", null));
 
@@ -898,7 +905,7 @@ namespace UAssetGUI
 
                     long determinedOffset = asset.UseSeparateBulkDataFiles ? (thisPD.Offset - asset.Exports[0].SerialOffset) : thisPD.Offset;
 
-                    row.Cells[absoluteColumnIndexer + 9].Value = thisPD.DuplicationIndex;
+                    row.Cells[absoluteColumnIndexer + 9].Value = thisPD.ArrayIndex;
                     row.Cells[absoluteColumnIndexer + 10].Value = determinedOffset < 0 ? "N/A" : determinedOffset.ToString();
                     row.Cells[absoluteColumnIndexer + 10].ReadOnly = true;
                     row.Cells[absoluteColumnIndexer + 11].Value = thisPD.IsZero.ToString();
@@ -1084,10 +1091,10 @@ namespace UAssetGUI
                     }
                 }
 
-                string duplicationIndex = row.Cells[row.Cells.Count - 4].Value.ToString();
+                string ArrayIndex = row.Cells[row.Cells.Count - 4].Value.ToString();
                 string isZero = row.Cells[row.Cells.Count - 2].Value.ToString();
 
-                int.TryParse(duplicationIndex, out finalProp.DuplicationIndex);
+                int.TryParse(ArrayIndex, out finalProp.ArrayIndex);
                 finalProp.IsZero = (isZero.ToLowerInvariant() == "true" || isZero == "1");
                 return finalProp;
             }
@@ -1215,7 +1222,7 @@ namespace UAssetGUI
                     dataGridView1.Rows.Add(new object[] { "PackageGuid", asset.PackageGuid.ConvertToString() });
                     dataGridView1.Rows.Add(new object[] { "PackageFlags", asset.PackageFlags.ToString() });
                     dataGridView1.Rows.Add(new object[] { "PackageSource", asset.PackageSource.ToString() });
-                    dataGridView1.Rows.Add(new object[] { "FolderName", asset.FolderName.Value });
+                    dataGridView1.Rows.Add(new object[] { asset.ObjectVersionUE5 >= ObjectVersionUE5.ADD_SOFTOBJECTPATH_LIST ? "PackageName" : "FolderName", asset.FolderName.Value });
 
                     dataGridView1.Rows[0].Cells[0].ToolTipText = "The package file version number when this package was saved. Unrelated to imports.";
                     dataGridView1.Rows[1].Cells[0].ToolTipText = "Should this asset not serialize its engine and custom versions?";
@@ -1223,7 +1230,7 @@ namespace UAssetGUI
                     dataGridView1.Rows[3].Cells[0].ToolTipText = "Current ID for this package. Effectively unused.";
                     dataGridView1.Rows[4].Cells[0].ToolTipText = "The flags for this package.";
                     dataGridView1.Rows[5].Cells[0].ToolTipText = "Value that is used to determine if the package was saved by Epic, a licensee, modder, etc.";
-                    dataGridView1.Rows[6].Cells[0].ToolTipText = "The Generic Browser folder name that this package lives in. Usually \"None\" in cooked assets.";
+                    dataGridView1.Rows[6].Cells[0].ToolTipText = asset.ObjectVersionUE5 >= ObjectVersionUE5.ADD_SOFTOBJECTPATH_LIST ? "The package name the file was last saved with." : "The Generic Browser folder name that this package lives in. Usually \"None\" in cooked assets.";
 
                     for (int i = 0; i < dataGridView1.Rows.Count; i++)
                     {
@@ -1326,6 +1333,7 @@ namespace UAssetGUI
                 case TableHandlerMode.DependsMap:
                     AddColumns(new string[] { "Export Index", "Value", "" });
 
+                    if (asset.DependsMap == null) break;
                     for (int num = 0; num < asset.DependsMap.Count; num++)
                     {
                         for (int num2 = 0; num2 < asset.DependsMap[num].Length; num2++)
@@ -1337,6 +1345,7 @@ namespace UAssetGUI
                 case TableHandlerMode.SoftPackageReferences:
                     AddColumns(new string[] { "Value", "" });
 
+                    if (asset.SoftPackageReferenceList == null) break;
                     for (int num = 0; num < asset.SoftPackageReferenceList.Count; num++)
                     {
                         dataGridView1.Rows.Add(asset.SoftPackageReferenceList[num]?.ToString() ?? FString.NullCase);
@@ -1388,6 +1397,7 @@ namespace UAssetGUI
                 case TableHandlerMode.DataResources:
                     AddColumns(new string[] { "Index", "Flags", "SerialOffset", "DuplicateSerialOffset", "SerialSize", "RawSize", "OuterIndex", "LegacyBulkDataFlags", "" });
 
+                    if (asset.DataResources == null) break;
                     for (int num = 0; num < asset.DataResources.Count; num++)
                     {
                         var dataResource = asset.DataResources[num];
@@ -1397,6 +1407,7 @@ namespace UAssetGUI
                 case TableHandlerMode.CustomVersionContainer:
                     AddColumns(new string[] { "Name", "Version", "" });
 
+                    if (asset.CustomVersionContainer == null) break;
                     for (int num = 0; num < asset.CustomVersionContainer.Count; num++)
                     {
                         dataGridView1.Rows.Add(new object[] { asset.CustomVersionContainer[num].FriendlyName == null ? Convert.ToString(asset.CustomVersionContainer[num].Key) : asset.CustomVersionContainer[num].FriendlyName, asset.CustomVersionContainer[num].Version });
@@ -1405,7 +1416,7 @@ namespace UAssetGUI
                 case TableHandlerMode.ExportData:
                     if (treeView1.SelectedNode is PointingTreeNode pointerNode)
                     {
-                        AddColumns(new string[] { "Name", "Type", "Variant", "Value", "Value 2", "Value 3", "Value 4", "Value 5", "DupIndex", "Serial Offset", "Is Zero", "" });
+                        AddColumns(new string[] { "Name", "Type", "Variant", "Value", "Value 2", "Value 3", "Value 4", "Value 5", "ArrayIndex", "Serial Offset", "Is Zero", "" });
                         bool standardRendering = true;
                         PropertyData[] renderingArr = null;
 
@@ -2282,7 +2293,7 @@ namespace UAssetGUI
 
                     break;
                 case TableHandlerMode.DependsMap:
-                    asset.DependsMap = new List<int[]>();
+                    var newDM = new List<int[]>();
                     foreach (DataGridViewRow row in dataGridView1.Rows)
                     {
                         int[] vals = new int[2];
@@ -2302,33 +2313,42 @@ namespace UAssetGUI
 
                         if (vals[0] == 0) continue;
 
-                        if (asset.DependsMap.Count > vals[0])
+                        if (newDM.Count > vals[0])
                         {
-                            var arr = asset.DependsMap[vals[0]];
+                            var arr = newDM[vals[0]];
                             Array.Resize(ref arr, arr.Length + 1);
                             arr[arr.Length - 1] = vals[1];
-                            asset.DependsMap[vals[0]] = arr;
+                            newDM[vals[0]] = arr;
                         }
                         else
                         {
-                            asset.DependsMap.Insert(vals[0], new int[] { vals[1] });
+                            newDM.Insert(vals[0], new int[] { vals[1] });
                         }
                     }
+
+                    int numDependsInts = 0;
+                    foreach (var entry in newDM) numDependsInts += entry.Length;
+
+                    if (asset.DependsMap == null && numDependsInts == 0) break;
+                    asset.DependsMap = newDM;
                     break;
                 case TableHandlerMode.SoftPackageReferences:
-                    asset.SoftPackageReferenceList = new List<FString>();
+                    var newSPR = new List<FString>();
                     foreach (DataGridViewRow row in dataGridView1.Rows)
                     {
                         string strVal = (string)row.Cells[0].Value;
-                        if (!string.IsNullOrEmpty(strVal)) asset.SoftPackageReferenceList.Add(FString.FromString(strVal));
+                        if (!string.IsNullOrEmpty(strVal)) newSPR.Add(FString.FromString(strVal));
                     }
+
+                    if (asset.SoftPackageReferenceList == null && newSPR.Count == 0) break;
+                    asset.SoftPackageReferenceList = newSPR;
                     break;
                 case TableHandlerMode.WorldTileInfo:
                     // Modification is disabled
 
                     break;
                 case TableHandlerMode.DataResources:
-                    asset.DataResources = new List<FObjectDataResource>();
+                    var newDR = new List<FObjectDataResource>();
                     foreach (DataGridViewRow row in dataGridView1.Rows)
                     {
                         if (row.Cells.Count < 8 || string.IsNullOrWhiteSpace(row.Cells[0]?.Value?.ToString())) continue;
@@ -2341,8 +2361,11 @@ namespace UAssetGUI
                         uint.TryParse(row.Cells[7]?.Value?.ToString(), out uint LegacyBulkDataFlags);
 
                         FObjectDataResource nuevo = new FObjectDataResource(flags, SerialOffset, DuplicateSerialOffset, SerialSize, RawSize, new FPackageIndex(OuterIndex), LegacyBulkDataFlags);
-                        asset.DataResources.Add(nuevo);
+                        newDR.Add(nuevo);
                     }
+
+                    if (asset.DataResources == null && newDR.Count == 0) break;
+                    asset.DataResources = newDR;
                     break;
                 case TableHandlerMode.CustomVersionContainer:
                     asset.CustomVersionContainer = new List<CustomVersion>();
